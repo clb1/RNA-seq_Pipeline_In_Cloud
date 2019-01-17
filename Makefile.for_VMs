@@ -1,0 +1,75 @@
+SHELL = /bin/bash
+
+# This is the master makefile that resides in a Google Compute Engine instance and
+# executes all functionality. It needs to exist in the ${RUN_DIR} of each instance.
+
+
+##
+## Variables defined in the instance metadata
+##
+
+#PROJECT_ID = $(shell curl -s "http://metadata.google.internal/computeMetadata/v1/project/project-id" -H "Metadata-Flavor: Google")
+#INSTANCE_ID = $(shell curl -s "http://metadata.google.internal/computeMetadata/v1/instance/id" -H "Metadata-Flavor: Google")
+#INSTANCE_DESCRIPTION = TODO
+
+# Returns something like projects/1070901690794/zones/us-central1-f
+ZONE_FULL = $(shell curl -s "http://metadata.google.internal/computeMetadata/v1/instance/zone" -H "Metadata-Flavor: Google") 
+ZONE = $(lastword $(subst /, ,${ZONE_FULL}))
+
+TIME_LIMIT = $(shell curl -s "http://metadata.google.internal/computeMetadata/v1/instance/attributes/timelimit?alt=text" -H "Metadata-Flavor: Google") 
+
+#TISSUE = $(shell curl -s "http://metadata.google.internal/computeMetadata/v1/instance/attributes/tissue?alt=text" -H "Metadata-Flavor: Google") 
+
+# A plus(+)-separated list of <tissue/sampleID>
+TASKS = $(shell curl -s "http://metadata.google.internal/computeMetadata/v1/instance/attributes/tasks?alt=text" -H "Metadata-Flavor: Google") 
+
+# Assume a "_" character will be added between sample ID and TARGET_SUFFIX
+TARGET_SUFFIX = $(shell curl -s "http://metadata.google.internal/computeMetadata/v1/instance/attributes/target_suffix?alt=text" -H "Metadata-Flavor: Google") 
+
+
+
+##
+## Instance-independent variables not defined in the instance metadata
+##
+SICKLE = /home/cbarrett/sickle/sickle-master/sickle pe -t sanger -q 6 -l 20 -g 
+RUN_DIR = /home/cbarrett/run
+BUCKET = gs://clb-bucket-1
+
+# For testing
+#TIME_LIMIT = 72000
+
+default: 
+    for t in $(subst +, , ${TASKS}); do \
+        ${MAKE} $${t}_${TARGET_SUFFIX} ; \
+        echo $$t; \
+        u=`cat /proc/uptime | cut -f 1 -d.` ; \
+        if [ $$u -ge ${TIME_LIMIT} ]; then \
+            sudo shutdown now ; \
+        fi ; \
+    done
+    sudo shutdown now
+
+test:
+    -mkdir ${RUN_DIR}
+    for t in $(subst +, , ${TASKS}); do \
+        rm -rf ${RUN_DIR}/* ; \
+        d=`echo $$t | cut -f 1 -d/` ; mkdir -p ${RUN_DIR}/$$d ; \
+        echo "Works" > ${RUN_DIR}/$${t}.txt ; \
+    done
+
+
+# Trim Fastqs, convert to Fastas, remove Fastqs from Storage, copy Fastas to Storage
+# % is <tissue>/<sample ID>
+%_R1.fa.gz %_R2.fa.gz:
+    su cbarrett ; \
+    d=`echo $* | cut -f 1 -d/` ; \
+    mkdir $$d ; \
+    gsutil cp ${BUCKET}/raw_fastq/$*_R?.fastq.gz $$d ; \
+    ${SICKLE} -f $*_R1.fastq.gz -r $*_R2.fastq.gz -o $*_R1_trimmed.fq.gz -p $*_R2_trimmed.fq.gz -s $*_trimmed_singletons.fq.gz ; \
+    rm $*_R1.fastq.gz $*_R2.fastq.gz ; \
+    zcat $*_R1_trimmed.fq.gz | awk '0==(NR+3)%4{ORS="\n"; split($$0,a," "); print (">" substr(a[1],2))}0==(NR+2)%4{ORS="\n"; gsub("\\.",""); print}' | gzip -c > $*_R1.fa.gz ; \
+    zcat $*_R2_trimmed.fq.gz | awk '0==(NR+3)%4{ORS="\n"; split($$0,a," "); print (">" substr(a[1],2))}0==(NR+2)%4{ORS="\n"; gsub("\\.",""); print}' | gzip -c > $*_R2.fa.gz ; \
+    gsutil cp $*_R?.fa.gz ${BUCKET}/fasta/$$d/ ; \
+    rm -rf $$d ; \
+    echo "gsutil rm ${BUCKET}/raw_fastq/$*_R?.fastq.gz"
+

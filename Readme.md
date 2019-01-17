@@ -1,0 +1,2 @@
+## RNA-seq pipeline in the Google cloud
+Only large Compute clusters or the cloud have the computational resources needed to collate and analyze the majority of the worldwide transcriptome sequencing data (RNA-seq). The Makefile and scripts included herein are a framework enabling automatic data tranfers and pipeline stage execution for tens of thousands of data sets and an arbitrary number of computational stages.
